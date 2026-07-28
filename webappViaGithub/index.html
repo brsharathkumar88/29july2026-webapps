@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PodDisplay · live cluster feed</title>
+<style>
+  :root {
+    --ink:        #0d1220;
+    --ink-2:      #131b2e;
+    --text:       #eef2fb;
+    --muted:      #8d9cbb;
+    --rule:       #24304d;
+    --cyan:       #35d6e6;
+    --amber:      #ffb545;
+    --violet:     #9d7bff;
+    --lime:       #a3e635;
+    --red:        #ff6b81;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.022) 0 1px, transparent 1px 28px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.022) 0 1px, transparent 1px 28px),
+      radial-gradient(900px 520px at 12% -12%, #1b2748, var(--ink));
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 26px 28px 18px;
+    border-bottom: 1px solid var(--rule);
+    display: flex; flex-wrap: wrap; gap: 18px 26px; align-items: flex-end;
+  }
+  h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.4px; }
+  h1 span { color: var(--cyan); }
+  .kicker {
+    font-size: 11px; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 7px;
+  }
+  .stats { display: flex; gap: 22px; margin-left: auto; align-items: flex-end; }
+  .stat b { display: block; font-size: 22px; font-weight: 600; line-height: 1.1; }
+  .stat small {
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+  .link { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+  .dot.live { background: var(--cyan); box-shadow: 0 0 0 0 rgba(53,214,230,.6); animation: ping 2s infinite; }
+  @keyframes ping {
+    70%  { box-shadow: 0 0 0 9px rgba(53,214,230,0); }
+    100% { box-shadow: 0 0 0 0 rgba(53,214,230,0); }
+  }
+
+  .controls {
+    padding: 14px 28px; border-bottom: 1px solid var(--rule);
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .controls input[type=search] {
+    background: var(--ink-2); border: 1px solid var(--rule); color: var(--text);
+    padding: 7px 11px; border-radius: 4px; font: inherit; min-width: 220px;
+  }
+  .controls label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .controls input[type=checkbox] { accent-color: var(--cyan); }
+
+  main { padding: 24px 28px 60px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+
+  /* signature element: each pod is a manifest slip torn off the API server */
+  .slip {
+    position: relative; background: var(--ink-2);
+    border: 1px solid var(--rule); border-left: 4px solid var(--accent, var(--cyan));
+    border-radius: 3px; padding: 15px 16px 13px;
+    transition: box-shadow .25s ease, opacity .25s ease;
+  }
+  /* the entry animation runs once, on the class the card is born with */
+  .slip.enter { animation: tear .38s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes tear {
+    from { opacity: 0; transform: translateY(-9px) rotate(-.6deg); }
+    to   { opacity: 1; transform: none; }
+  }
+  .slip.fresh { box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px var(--accent); }
+  .slip.fresh::after {
+    content: "new"; position: absolute; top: -8px; right: 10px;
+    background: var(--accent); color: #0b1020; font-size: 9px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; padding: 2px 7px; border-radius: 99px;
+  }
+  .slip.going { opacity: .45; filter: grayscale(.6); }
+
+  .slip .ns { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .slip .name { font-size: 15px; font-weight: 600; margin: 3px 0 10px; word-break: break-all; }
+  .row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 4px 0; font-size: 12px; border-top: 1px dashed rgba(255,255,255,.07);
+  }
+  .row span:first-child { color: var(--muted); }
+  .row span:last-child { text-align: right; word-break: break-all; }
+  .phase {
+    display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px;
+    background: rgba(255,255,255,.07); color: var(--accent);
+  }
+  .msg {
+    margin-top: 10px; padding: 8px 10px; border-radius: 3px; font-size: 11.5px;
+    background: rgba(255,255,255,.04); color: var(--muted); border-left: 2px solid var(--accent);
+  }
+  .empty {
+    border: 1px dashed var(--rule); border-radius: 6px; padding: 40px 26px;
+    color: var(--muted); font-size: 13px; line-height: 1.8;
+  }
+  .empty code { color: var(--cyan); background: rgba(53,214,230,.08); padding: 2px 6px; border-radius: 3px; }
+  .log {
+    margin-top: 34px; border-top: 1px solid var(--rule); padding-top: 14px;
+    font-size: 11.5px; color: var(--muted); max-height: 210px; overflow: auto;
+  }
+  .log div { padding: 2px 0; }
+  .log .t { color: #5f708f; margin-right: 10px; }
+  .log .ADDED { color: var(--lime); }
+  .log .MODIFIED { color: var(--amber); }
+  .log .DELETED { color: var(--red); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="kicker">demo.example.com / v1alpha1 / poddisplays</div>
+    <h1>Pod<span>Display</span> live feed</h1>
+    <div class="link" style="margin-top:9px">
+      <i class="dot" id="dot"></i><span id="conn">connecting to the operator…</span>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="c-total">0</b><small>pods watched</small></div>
+    <div class="stat"><b id="c-managed">0</b><small>from a CR</small></div>
+    <div class="stat"><b id="c-running">0</b><small>running</small></div>
+  </div>
+</header>
+
+<div class="controls">
+  <label><input type="checkbox" id="only-managed" checked /> only pods created by a PodDisplay</label>
+  <input type="search" id="filter" placeholder="filter by name or namespace" />
+</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>
+    No pods match yet. Create one and it appears here the moment the API server accepts it:<br><br>
+    <code>kubectl apply -f manifests/sample-poddisplay.yaml</code><br>
+    <code>./scripts/new-pod.sh my-first-pod</code><br><br>
+    Untick the filter above to watch every pod in the cluster instead.
+  </div>
+  <div class="log" id="log"></div>
+</main>
+
+<script>
+const state  = new Map();   // "ns/name" -> pod
+const seenAt = new Map();   // "ns/name" -> ms when this tab first saw it
+const cards  = new Map();   // "ns/name" -> cached DOM nodes
+
+const grid    = document.getElementById('grid');
+const empty   = document.getElementById('empty');
+const logEl   = document.getElementById('log');
+const dot     = document.getElementById('dot');
+const conn    = document.getElementById('conn');
+const onlyMgd = document.getElementById('only-managed');
+const filter  = document.getElementById('filter');
+
+const keyOf = p => p.namespace + '/' + p.name;
+const ACCENT = { cyan:'#35d6e6', amber:'#ffb545', violet:'#9d7bff', lime:'#a3e635' };
+const PHASE_ACCENT = { Pending:'#ffb545', Failed:'#ff6b81', Succeeded:'#a3e635' };
+
+function age(iso) {
+  if (!iso) return '—';
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  return Math.floor(s / 86400) + 'd';
+}
+
+// only touch the DOM when the value actually changed - no repaint, no flicker
+function setText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
+
+function buildCard() {
+  const el = document.createElement('article');
+  el.className = 'slip enter';
+  el.addEventListener('animationend', () => el.classList.remove('enter'), { once: true });
+  el.innerHTML =
+    '<div class="ns"></div>' +
+    '<div class="name"></div>' +
+    '<div class="row"><span>state</span><span class="phase"></span></div>' +
+    '<div class="row"><span>ready</span><span data-f="ready"></span></div>' +
+    '<div class="row"><span>image</span><span data-f="image"></span></div>' +
+    '<div class="row"><span>node</span><span data-f="node"></span></div>' +
+    '<div class="row"><span>pod ip</span><span data-f="ip"></span></div>' +
+    '<div class="row"><span>age</span><span data-f="age"></span></div>' +
+    '<div class="row" data-row="owner"><span>poddisplay</span><span data-f="owner"></span></div>' +
+    '<div class="msg" data-f="msg"></div>';
+  return {
+    el,
+    ns:       el.querySelector('.ns'),
+    name:     el.querySelector('.name'),
+    phase:    el.querySelector('.phase'),
+    ready:    el.querySelector('[data-f=ready]'),
+    image:    el.querySelector('[data-f=image]'),
+    node:     el.querySelector('[data-f=node]'),
+    ip:       el.querySelector('[data-f=ip]'),
+    age:      el.querySelector('[data-f=age]'),
+    ownerRow: el.querySelector('[data-row=owner]'),
+    owner:    el.querySelector('[data-f=owner]'),
+    msg:      el.querySelector('[data-f=msg]'),
+  };
+}
+
+function fillCard(c, p) {
+  const accent = PHASE_ACCENT[p.phase] || ACCENT[p.color] || ACCENT.cyan;
+  if (c.el.style.getPropertyValue('--accent') !== accent) c.el.style.setProperty('--accent', accent);
+  setText(c.ns, p.namespace);
+  setText(c.name, p.name);
+  setText(c.phase, p.deleting ? 'Terminating' : p.phase);
+  setText(c.ready, (p.ready ?? 0) + '/' + (p.total ?? 0) + ' · ' + (p.restarts ?? 0) + ' restarts');
+  setText(c.image, (p.images || []).join(', ') || '—');
+  setText(c.node, p.node || 'unscheduled');
+  setText(c.ip, p.podIP || '—');
+  setText(c.age, age(p.created));
+  c.ownerRow.hidden = !p.owner;
+  setText(c.owner, p.owner || '');
+  c.msg.hidden = !p.message;
+  setText(c.msg, p.message || '');
+  c.el.classList.toggle('going', !!p.deleting);
+  c.el.classList.toggle('fresh', Date.now() - (seenAt.get(keyOf(p)) || 0) < 12000);
+}
+
+function visible() {
+  const q = filter.value.trim().toLowerCase();
+  return [...state.values()]
+    .filter(p => !onlyMgd.checked || p.managed)
+    .filter(p => !q || (p.name + ' ' + p.namespace).toLowerCase().includes(q))
+    .sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+}
+
+function render() {
+  const all = [...state.values()];
+  setText(document.getElementById('c-total'), String(all.length));
+  setText(document.getElementById('c-managed'), String(all.filter(p => p.managed).length));
+  setText(document.getElementById('c-running'), String(all.filter(p => p.phase === 'Running').length));
+
+  const pods = visible();
+  empty.hidden = pods.length > 0;
+
+  const wanted = new Set(pods.map(keyOf));
+  for (const [k, c] of cards) {
+    if (!wanted.has(k)) { c.el.remove(); cards.delete(k); }
+  }
+
+  pods.forEach((p, i) => {
+    const k = keyOf(p);
+    let c = cards.get(k);
+    if (!c) { c = buildCard(); cards.set(k, c); }
+    fillCard(c, p);
+    if (grid.children[i] !== c.el) grid.insertBefore(c.el, grid.children[i] || null);
+  });
+}
+
+function addLog(type, pod) {
+  const line = document.createElement('div');
+  line.innerHTML =
+    '<span class="t">' + new Date().toLocaleTimeString() + '</span>' +
+    '<span class="' + type + '">' + type.padEnd(9) + '</span> ' +
+    pod.namespace + '/' + pod.name + ' · ' + pod.phase;
+  logEl.prepend(line);
+  while (logEl.childElementCount > 120) logEl.lastElementChild.remove();
+}
+
+const es = new EventSource('/api/events');
+
+es.onopen  = () => { dot.classList.add('live');    setText(conn, 'watching the cluster'); };
+es.onerror = () => { dot.classList.remove('live'); setText(conn, 'operator unreachable — retrying'); };
+
+es.addEventListener('snapshot', e => {
+  JSON.parse(e.data).forEach(p => { state.set(keyOf(p), p); seenAt.set(keyOf(p), 0); });
+  render();
+});
+
+es.addEventListener('pod', e => {
+  const { type, pod } = JSON.parse(e.data);
+  const k = keyOf(pod);
+  if (type === 'DELETED') { state.delete(k); seenAt.delete(k); }
+  else {
+    if (!state.has(k)) seenAt.set(k, Date.now());
+    state.set(k, pod);
+  }
+  addLog(type, pod);
+  render();
+});
+
+onlyMgd.addEventListener('change', render);
+filter.addEventListener('input', render);
+setInterval(render, 1000);   // keeps the age counters ticking - now a no-op repaint
+render();
+</script>
+</body>
+</html>
